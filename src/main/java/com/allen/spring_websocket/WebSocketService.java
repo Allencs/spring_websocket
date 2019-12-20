@@ -1,18 +1,18 @@
 package com.allen.spring_websocket;
 
-
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import javax.websocket.*;
+import javax.websocket.server.PathParam;
 import javax.websocket.server.ServerEndpoint;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 
-@ServerEndpoint(value = "/websocket")
+@ServerEndpoint(value = "/websocket/{userId}")
 @Component
 public class WebSocketService {
 
@@ -23,22 +23,22 @@ public class WebSocketService {
     private static int onlineCount = 0;
 
     //concurrent包的线程安全Set，用来存放每个客户端对应的MyWebSocket对象。
-    private static CopyOnWriteArraySet<WebSocketService> webSocketSet = new CopyOnWriteArraySet<>();
+    private static ConcurrentHashMap<String, WebSocketService> webSocketSet = new ConcurrentHashMap<>();
 
     //与某个客户端的连接会话，需要通过它来给客户端发送数据
     private Session session;
 
-//    private long startTime =  System.currentTimeMillis();
-//
-//    private long endTime =  System.currentTimeMillis();
-//    long usedTime = (endTime-startTime)/1000;
+    //当前发消息的人员编号
+    private String userId = "";
+
 
     /**
      * 连接建立成功调用的方法*/
     @OnOpen
-    public void onOpen(Session session) {
+    public void onOpen(@PathParam(value = "userId") String param, Session session) {
+        this.userId = param;
         this.session = session;
-        webSocketSet.add(this);     //加入set中
+        webSocketSet.put(param, this);     //加入set中
         addOnlineCount();           //在线数加1
         logger.info("有新连接加入！当前在线人数为" + getOnlineCount());
         try {
@@ -53,9 +53,11 @@ public class WebSocketService {
      */
     @OnClose
     public void onClose() {
-        webSocketSet.remove(this);  //从set中删除
+        if (!userId.equals("")){
+            webSocketSet.remove(userId);  //从set中删除
+        }
         subOnlineCount();           //在线数减1
-        logger.info("有一连接关闭！当前在线人数为" + getOnlineCount());
+        logger.info("用户id：" + userId + "关闭连接 | 当前在线人数为" + getOnlineCount());
     }
 
     /**
@@ -63,38 +65,44 @@ public class WebSocketService {
      *
      * @param message 客户端发送过来的消息*/
     @OnMessage
-    public void onMessage(String message) throws Exception {
-        logger.info("来自客户端的消息:" + message);
-        byte[] b = "ping".getBytes();
-        ByteBuffer bytebuffer = ByteBuffer.wrap(b);
+    public void onMessage(String message) throws IOException {
+        logger.info("来自用户" + userId + "的消息 | " + message);
+//        byte[] b = "ping".getBytes();
+//        ByteBuffer bytebuffer = ByteBuffer.wrap(b);
+        sendToUser(userId, "Got the message");
+//        sendToAll();
 
-        //群发消息
-        for (WebSocketService item : webSocketSet) {
-            if (message.equals("push")){
-                Thread.sleep(1000);
-                int count = 0;
-                while (count < 10) {
-                    try {
-                        Thread.sleep(1000);
-                        item.sendMessage("Spring WebSocket");
+    }
 
-                        count++;
 
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
+    /**
+     * 给指定的人发消息
+     * @param s_userId 用户id
+     * @param message 用户发送的消息
+     */
+    public void sendToUser(String s_userId, String message){
+
+        try {
+            webSocketSet.get(s_userId).sendMessage("hi user " + s_userId + " | " + message);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+
+    /**
+     *发送给所有用户
+     */
+    public void sendToAll(){
+        for (String key : webSocketSet.keySet()) {
+            try {
+                if (userId.equals(key)) {
+                    webSocketSet.get(key).sendMessage("hi user " + key + " | " + "Got the message!");
                 }
-
-            }else {
-                try {
-                    item.sendMessage("SUCCESS");
-
-                    sendPing(bytebuffer);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+            } catch (IOException e) {
+                e.printStackTrace();
             }
-
         }
 
     }
@@ -108,8 +116,8 @@ public class WebSocketService {
         ByteBuffer buffer = msg.getApplicationData();
         byte[] content = new byte[buffer.limit()];
         buffer.get(content);
-        String pong_message = new String(content);
-        logger.info("Get Pong message: " + pong_message);
+//        String pong_message = new String(content);
+//        logger.info("Get Pong message: " + pong_message);
         byte[] b = "ping".getBytes();
         ByteBuffer bytebuffer = ByteBuffer.wrap(b);
         try {
@@ -126,19 +134,19 @@ public class WebSocketService {
      * */
      @OnError
      public void onError(Throwable error) {
-//         logger.info("发生错误");
+//         logger.info("发生错误" + " | " + error.getClass().getName());
          error.printStackTrace();
 //         System.out.println(error.getClass().getName());
      }
 
 
-     private void sendMessage(String message) throws IOException {
+     private synchronized void sendMessage(String message) throws IOException {
          this.session.getBasicRemote().sendText(message);
-         //this.session.getAsyncRemote().sendText(message);
+//         this.session.getAsyncRemote().sendText(message);
      }
 
      /** 发送心跳包 */
-     private void sendPing(ByteBuffer message) throws IOException{
+     private synchronized void sendPing(ByteBuffer message) throws IOException{
          this.session.getBasicRemote().sendPing(message);
      }
 
